@@ -1,0 +1,15 @@
+# API keys - never commit these
+.keys.json
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Excel files (business data)
+*.xlsx
+*.xls
+
+# macOS
+.DS_Store
