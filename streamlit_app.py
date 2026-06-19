@@ -8,6 +8,43 @@ import streamlit as st
 import config
 from trackers import ais as tracker_ais
 
+
+# ── Column auto-detection ─────────────────────────────────────────────────────
+
+_HEADER_MAP = {
+    "vessel":          ["VESSEL / VOYAGE NAME", "VESSEL NAME", "VESSEL"],
+    "carrier":         ["CARRIER", "FORWARDER / LINE", "FORWARDER"],
+    "etd":             ["ETD"],
+    "eta":             ["ETA"],
+    "container":       ["CONTAINER ID", "CONTAINER NO", "CONTAINER"],
+    "location":        ["CONTAINER LOCATION"],
+    "actual_delivery": ["ACTUAL DELIVERY DATE"],
+    "mmsi":            ["MMSI"],
+    "updated_eta":     ["UPDATED ETA"],
+    "actual_arr":      ["ACTUAL ARRIVAL"],
+}
+
+
+def detect_columns(ws) -> dict:
+    """Read header row and return {key: column_index} for all known columns."""
+    cols = {}
+    for cell in ws[1]:
+        if not cell.value:
+            continue
+        val = str(cell.value).strip().upper()
+        for key, options in _HEADER_MAP.items():
+            if key not in cols and val in [o.upper() for o in options]:
+                cols[key] = cell.column
+
+    # output columns that don't exist yet go after the last used column
+    next_col = ws.max_column + 1
+    for key in ("mmsi", "updated_eta", "actual_arr"):
+        if key not in cols:
+            cols[key] = next_col
+            next_col += 1
+
+    return cols
+
 # Load API key from Streamlit secrets (set via Streamlit Cloud dashboard)
 try:
     config.MYSHIPTRACKING_API_KEY = st.secrets["MYSHIPTRACKING_API_KEY"]
@@ -136,51 +173,54 @@ wb = openpyxl.load_workbook(uploaded)
 ws = wb.active
 total = skipped = 0
 
-for col, label in [
-    (config.COL_MMSI,        "MMSI"),
-    (config.COL_UPDATED_ETA, "UPDATED ETA"),
-    (config.COL_ACTUAL_ARR,  "ACTUAL ARRIVAL"),
-]:
-    if not ws.cell(row=1, column=col).value:
-        ws.cell(row=1, column=col).value = label
+cols = detect_columns(ws)
+
+missing = [k for k in ("vessel", "container", "location") if k not in cols]
+if missing:
+    st.error(f"Could not find required columns in this file: {', '.join(missing)}")
+    st.stop()
+
+for key, label in [("mmsi", "MMSI"), ("updated_eta", "UPDATED ETA"), ("actual_arr", "ACTUAL ARRIVAL")]:
+    if not ws.cell(row=1, column=cols[key]).value:
+        ws.cell(row=1, column=cols[key]).value = label
 
 tracker_ais.clear_run_cache()
 
 with st.status("Tracking containers…", expanded=True) as status_box:
     for row_idx in range(config.HEADER_ROWS + 1, ws.max_row + 1):
-        carrier      = ws.cell(row=row_idx, column=config.COL_CARRIER).value
-        container_id = ws.cell(row=row_idx, column=config.COL_CONTAINER).value
+        carrier      = ws.cell(row=row_idx, column=cols.get("carrier", 1)).value
+        container_id = ws.cell(row=row_idx, column=cols["container"]).value
 
         if not carrier and not container_id:
             break
-        if not carrier or not container_id:
+        if not container_id:
             continue
 
-        carrier      = str(carrier).strip()
+        carrier      = str(carrier or "").strip()
         container_id = str(container_id).strip().upper()
         total += 1
 
         # skip if manually delivered
-        delivered = ws.cell(row=row_idx, column=config.COL_ACTUAL_DELIVERY).value
+        delivered = ws.cell(row=row_idx, column=cols["actual_delivery"]).value if "actual_delivery" in cols else None
         if delivered:
             skipped += 1
             continue
 
         # skip if already marked arrived
-        current_loc = str(ws.cell(row=row_idx, column=config.COL_LOCATION).value or "")
+        current_loc = str(ws.cell(row=row_idx, column=cols["location"]).value or "")
         if current_loc.startswith("ARRIVED"):
             skipped += 1
             continue
 
         st.write(f"**{container_id}** ({carrier})")
 
-        vessel_raw   = ws.cell(row=row_idx, column=config.COL_VESSEL).value
-        mmsi_cell    = ws.cell(row=row_idx, column=config.COL_MMSI)
-        eta_cell     = ws.cell(row=row_idx, column=config.COL_UPDATED_ETA)
-        actual_cell  = ws.cell(row=row_idx, column=config.COL_ACTUAL_ARR)
-        loc_cell     = ws.cell(row=row_idx, column=config.COL_LOCATION)
-        etd_cell     = ws.cell(row=row_idx, column=config.COL_ETD)
-        booked_eta   = ws.cell(row=row_idx, column=config.COL_ETA)
+        vessel_raw  = ws.cell(row=row_idx, column=cols["vessel"]).value if "vessel" in cols else None
+        mmsi_cell   = ws.cell(row=row_idx, column=cols["mmsi"])
+        eta_cell    = ws.cell(row=row_idx, column=cols["updated_eta"])
+        actual_cell = ws.cell(row=row_idx, column=cols["actual_arr"])
+        loc_cell    = ws.cell(row=row_idx, column=cols["location"])
+        etd_cell    = ws.cell(row=row_idx, column=cols["etd"]) if "etd" in cols else None
+        booked_eta  = ws.cell(row=row_idx, column=cols["eta"]) if "eta" in cols else None
 
         if not vessel_raw:
             st.write("  ↳ no vessel name")
@@ -208,8 +248,8 @@ with st.status("Tracking containers…", expanded=True) as status_box:
 
         if situation.startswith("ARRIVED") and us_eta:
             actual_cell.value = us_eta
-            etd  = _fmt_date(_eta_date(str(etd_cell.value or "")))
-            exp  = _fmt_date(_eta_date(str(booked_eta.value or "")))
+            etd  = _fmt_date(_eta_date(str(etd_cell.value if etd_cell else "")))
+            exp  = _fmt_date(_eta_date(str(booked_eta.value if booked_eta else "")))
             act  = _fmt_date(us_eta)
             st.write(f"  ↳ {situation} | ETD {etd} | Expected {exp} | Actual {act}")
         else:
