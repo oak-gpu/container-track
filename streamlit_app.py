@@ -100,6 +100,37 @@ def _fmt_date(iso_date: str) -> str:
         return iso_date
 
 
+# ── Translations (UI only — Excel content stays in English) ──────────────────
+
+_STRINGS = {
+    "en": {
+        "title":       "🚢 Container Tracker",
+        "caption":     "Upload your Excel file to track shipments via AIS. Original columns are never modified.",
+        "file_label":  "Select your Excel file (.xlsx)",
+        "track_btn":   "Track Containers",
+        "tracking":    "Tracking containers…",
+        "done":        "Done — {total} containers processed, {skipped} skipped",
+        "success":     "✓ {total} containers processed, {skipped} skipped",
+        "download":    "⬇️ Download processed file",
+    },
+    "tr": {
+        "title":       "🚢 Konteyner Takip",
+        "caption":     "Gönderi takibi için Excel dosyanızı yükleyin. Orijinal sütunlar değiştirilmez.",
+        "file_label":  "Excel dosyanızı seçin (.xlsx)",
+        "track_btn":   "Konteynerleri Takip Et",
+        "tracking":    "Konteynerler takip ediliyor…",
+        "done":        "Tamamlandı — {total} konteyner işlendi, {skipped} atlandı",
+        "success":     "✓ {total} konteyner işlendi, {skipped} atlandı",
+        "download":    "⬇️ İşlenmiş dosyayı indir",
+    },
+}
+
+
+def t(key: str, **kwargs) -> str:
+    s = _STRINGS[st.session_state.get("lang", "en")].get(key, key)
+    return s.format(**kwargs) if kwargs else s
+
+
 def _build_situation(ais: dict) -> tuple[str, str]:
     from trackers.ais import is_us_port, _port_name, _port_locode
 
@@ -154,17 +185,28 @@ def _build_situation(ais: dict) -> tuple[str, str]:
 # ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="Container Tracker", page_icon="🚢", layout="centered")
-st.title("🚢 Container Tracker")
-st.caption("Upload your Excel file to track shipments via AIS. Original columns are never modified.")
+
+# language toggle
+if "lang" not in st.session_state:
+    st.session_state.lang = "en"
+
+col_l, col_r = st.columns([6, 1])
+with col_r:
+    if st.button("🇹🇷 TR" if st.session_state.lang == "en" else "🇬🇧 EN"):
+        st.session_state.lang = "tr" if st.session_state.lang == "en" else "en"
+        st.rerun()
+
+st.title(t("title"))
+st.caption(t("caption"))
 
 # ── File upload ───────────────────────────────────────────────────────────────
 
-uploaded = st.file_uploader("Select your Excel file (.xlsx)", type=["xlsx"])
+uploaded = st.file_uploader(t("file_label"), type=["xlsx"])
 
 if not uploaded:
     st.stop()
 
-if not st.button("Track Containers", type="primary", use_container_width=True):
+if not st.button(t("track_btn"), type="primary", use_container_width=True):
     st.stop()
 
 # ── Processing ────────────────────────────────────────────────────────────────
@@ -174,7 +216,7 @@ total = skipped = 0
 
 tracker_ais.clear_run_cache()
 
-with st.status("Tracking containers…", expanded=True) as status_box:
+with st.status(t("tracking"), expanded=True) as status_box:
     for ws in wb.worksheets:
         cols = detect_columns(ws)
 
@@ -259,7 +301,7 @@ with st.status("Tracking containers…", expanded=True) as status_box:
                 st.write(f"  ↳ {situation}")
 
     status_box.update(
-        label=f"Done — {total} containers processed, {skipped} skipped",
+        label=t("done", total=total, skipped=skipped),
         state="complete",
     )
 
@@ -273,9 +315,9 @@ timestamp = datetime.now().strftime("%Y-%m-%d %H-%M")
 orig_name = uploaded.name.replace(".xlsx", "")
 out_name  = f"{orig_name} - Processed {timestamp}.xlsx"
 
-st.success(f"✓ {total} containers processed, {skipped} skipped")
+st.success(t("success", total=total, skipped=skipped))
 st.download_button(
-    label="⬇️ Download processed file",
+    label=t("download"),
     data=output,
     file_name=out_name,
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
