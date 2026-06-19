@@ -170,90 +170,93 @@ if not st.button("Track Containers", type="primary", use_container_width=True):
 # ── Processing ────────────────────────────────────────────────────────────────
 
 wb = openpyxl.load_workbook(uploaded)
-ws = wb.active
 total = skipped = 0
-
-cols = detect_columns(ws)
-
-missing = [k for k in ("vessel", "container", "location") if k not in cols]
-if missing:
-    st.error(f"Could not find required columns in this file: {', '.join(missing)}")
-    st.stop()
-
-for key, label in [("mmsi", "MMSI"), ("updated_eta", "UPDATED ETA"), ("actual_arr", "ACTUAL ARRIVAL")]:
-    if not ws.cell(row=1, column=cols[key]).value:
-        ws.cell(row=1, column=cols[key]).value = label
 
 tracker_ais.clear_run_cache()
 
 with st.status("Tracking containers…", expanded=True) as status_box:
-    for row_idx in range(config.HEADER_ROWS + 1, ws.max_row + 1):
-        carrier      = ws.cell(row=row_idx, column=cols.get("carrier", 1)).value
-        container_id = ws.cell(row=row_idx, column=cols["container"]).value
+    for ws in wb.worksheets:
+        cols = detect_columns(ws)
 
-        if not carrier and not container_id:
-            break
-        if not container_id:
+        # skip sheets that don't look like tracking sheets
+        missing = [k for k in ("vessel", "container", "location") if k not in cols]
+        if missing:
+            st.write(f"**Sheet '{ws.title}'** — skipped (missing columns: {', '.join(missing)})")
             continue
 
-        carrier      = str(carrier or "").strip()
-        container_id = str(container_id).strip().upper()
-        total += 1
+        st.write(f"### Sheet: {ws.title}")
 
-        # skip if manually delivered
-        delivered = ws.cell(row=row_idx, column=cols["actual_delivery"]).value if "actual_delivery" in cols else None
-        if delivered:
-            skipped += 1
-            continue
+        for key, label in [("mmsi", "MMSI"), ("updated_eta", "UPDATED ETA"), ("actual_arr", "ACTUAL ARRIVAL")]:
+            if not ws.cell(row=1, column=cols[key]).value:
+                ws.cell(row=1, column=cols[key]).value = label
 
-        # skip if already marked arrived
-        current_loc = str(ws.cell(row=row_idx, column=cols["location"]).value or "")
-        if current_loc.startswith("ARRIVED"):
-            skipped += 1
-            continue
+        for row_idx in range(config.HEADER_ROWS + 1, ws.max_row + 1):
+            carrier      = ws.cell(row=row_idx, column=cols.get("carrier", 1)).value
+            container_id = ws.cell(row=row_idx, column=cols["container"]).value
 
-        st.write(f"**{container_id}** ({carrier})")
+            if not carrier and not container_id:
+                break
+            if not container_id:
+                continue
 
-        vessel_raw  = ws.cell(row=row_idx, column=cols["vessel"]).value if "vessel" in cols else None
-        mmsi_cell   = ws.cell(row=row_idx, column=cols["mmsi"])
-        eta_cell    = ws.cell(row=row_idx, column=cols["updated_eta"])
-        actual_cell = ws.cell(row=row_idx, column=cols["actual_arr"])
-        loc_cell    = ws.cell(row=row_idx, column=cols["location"])
-        etd_cell    = ws.cell(row=row_idx, column=cols["etd"]) if "etd" in cols else None
-        booked_eta  = ws.cell(row=row_idx, column=cols["eta"]) if "eta" in cols else None
+            carrier      = str(carrier or "").strip()
+            container_id = str(container_id).strip().upper()
+            total += 1
 
-        if not vessel_raw:
-            st.write("  ↳ no vessel name")
-            continue
+            # skip if manually delivered
+            delivered = ws.cell(row=row_idx, column=cols["actual_delivery"]).value if "actual_delivery" in cols else None
+            if delivered:
+                skipped += 1
+                continue
 
-        mmsi, err = tracker_ais.resolve_mmsi(str(vessel_raw), mmsi_cell.value)
-        if not mmsi:
-            st.write(f"  ↳ AIS: {err}")
-            continue
+            # skip if already marked arrived
+            current_loc = str(ws.cell(row=row_idx, column=cols["location"]).value or "")
+            if current_loc.startswith("ARRIVED"):
+                skipped += 1
+                continue
 
-        mmsi_cell.value = mmsi
-        ais_data = tracker_ais.get_vessel_status(mmsi)
+            st.write(f"**{container_id}** ({carrier})")
 
-        if ais_data.get("error"):
-            err_msg = ais_data["error"]
-            if "404" in err_msg:
-                st.write(f"  ↳ vessel not found in AIS coverage")
+            vessel_raw  = ws.cell(row=row_idx, column=cols["vessel"]).value if "vessel" in cols else None
+            mmsi_cell   = ws.cell(row=row_idx, column=cols["mmsi"])
+            eta_cell    = ws.cell(row=row_idx, column=cols["updated_eta"])
+            actual_cell = ws.cell(row=row_idx, column=cols["actual_arr"])
+            loc_cell    = ws.cell(row=row_idx, column=cols["location"])
+            etd_cell    = ws.cell(row=row_idx, column=cols["etd"]) if "etd" in cols else None
+            booked_eta  = ws.cell(row=row_idx, column=cols["eta"]) if "eta" in cols else None
+
+            if not vessel_raw:
+                st.write("  ↳ no vessel name")
+                continue
+
+            mmsi, err = tracker_ais.resolve_mmsi(str(vessel_raw), mmsi_cell.value)
+            if not mmsi:
+                st.write(f"  ↳ AIS: {err}")
+                continue
+
+            mmsi_cell.value = mmsi
+            ais_data = tracker_ais.get_vessel_status(mmsi)
+
+            if ais_data.get("error"):
+                err_msg = ais_data["error"]
+                if "404" in err_msg:
+                    st.write(f"  ↳ vessel not found in AIS coverage")
+                else:
+                    st.write(f"  ↳ AIS error: {err_msg}")
+                continue
+
+            situation, us_eta = _build_situation(ais_data)
+            loc_cell.value  = situation
+            eta_cell.value  = us_eta
+
+            if situation.startswith("ARRIVED") and us_eta:
+                actual_cell.value = us_eta
+                etd  = _fmt_date(_eta_date(str(etd_cell.value if etd_cell else "")))
+                exp  = _fmt_date(_eta_date(str(booked_eta.value if booked_eta else "")))
+                act  = _fmt_date(us_eta)
+                st.write(f"  ↳ {situation} | ETD {etd} | Expected {exp} | Actual {act}")
             else:
-                st.write(f"  ↳ AIS error: {err_msg}")
-            continue
-
-        situation, us_eta = _build_situation(ais_data)
-        loc_cell.value  = situation
-        eta_cell.value  = us_eta
-
-        if situation.startswith("ARRIVED") and us_eta:
-            actual_cell.value = us_eta
-            etd  = _fmt_date(_eta_date(str(etd_cell.value if etd_cell else "")))
-            exp  = _fmt_date(_eta_date(str(booked_eta.value if booked_eta else "")))
-            act  = _fmt_date(us_eta)
-            st.write(f"  ↳ {situation} | ETD {etd} | Expected {exp} | Actual {act}")
-        else:
-            st.write(f"  ↳ {situation}")
+                st.write(f"  ↳ {situation}")
 
     status_box.update(
         label=f"Done — {total} containers processed, {skipped} skipped",
