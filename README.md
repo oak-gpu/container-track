@@ -2,7 +2,7 @@
 
 A web tool that reads your shipment Excel files and automatically looks up each vessel's current position using AIS (ship tracking satellites). It writes the result back into your file so you always know where your containers are.
 
-**Live app:** https://container-track.streamlit.app
+**Live app:** https://container-track-t4tfct6x2d8hx4fwlxbyft.streamlit.app/
 
 ---
 
