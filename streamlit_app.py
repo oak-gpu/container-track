@@ -163,14 +163,12 @@ with st.status("Tracking containers…", expanded=True) as status_box:
         # skip if manually delivered
         delivered = ws.cell(row=row_idx, column=config.COL_ACTUAL_DELIVERY).value
         if delivered:
-            st.write(f"**{container_id}** — manually delivered, skipped")
             skipped += 1
             continue
 
         # skip if already marked arrived
         current_loc = str(ws.cell(row=row_idx, column=config.COL_LOCATION).value or "")
         if current_loc.startswith("ARRIVED"):
-            st.write(f"**{container_id}** — already arrived, skipped")
             skipped += 1
             continue
 
@@ -197,7 +195,11 @@ with st.status("Tracking containers…", expanded=True) as status_box:
         ais_data = tracker_ais.get_vessel_status(mmsi)
 
         if ais_data.get("error"):
-            st.write(f"  ↳ AIS error: {ais_data['error']}")
+            err_msg = ais_data["error"]
+            if "404" in err_msg:
+                st.write(f"  ↳ vessel not found in AIS coverage")
+            else:
+                st.write(f"  ↳ AIS error: {err_msg}")
             continue
 
         situation, us_eta = _build_situation(ais_data)
